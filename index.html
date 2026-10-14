@@ -15,7 +15,7 @@ canvas{display:block;position:absolute;left:50%;top:50%;transform:translate(-50%
 (()=>{
 'use strict';
 // ====== Versio: kun tätä muutetaan, ennätys nollautuu ======
-const VERSION='2';
+const VERSION='3';
 const BEST_KEY='oskarin_passat_best_v'+VERSION;
 
 const W=360,H=720;
@@ -74,7 +74,7 @@ const SENDERS=['Vaimo','Jouni','Anoppi','Heikki'];
 
 // ruudukko (takakontti)
 const CS=44,GX=48,GY=100,GC=6,GR=4;
-const SX=48,SY=330;
+const SX=224,SY=336;
 
 const G={state:'title',round:1,pieces:[],junk:[],best:0,stopIdx:0,offers:[],store:null,stopT:0,result:null,msg:[],sender:'Vaimo'};
 G.best=parseInt(lsGet(BEST_KEY)||'0',10)||0;
@@ -164,7 +164,7 @@ function humUpdate(){
  if(!AC||!D)return;const t=AC.currentTime;
  const on=G.state==='drive';
  const eOn=on&&D.mode==='e'?Math.min(0.045,D.v/130*0.05):0;
- const bOn=on&&(D.mode==='b'||D.boostT>0.5)?0.03+D.v/130*0.05:0;
+ const bOn=on&&(D.mode==='h'||D.boostT>0.5)?0.03+D.v/130*0.05:0;
  humEG.gain.setTargetAtTime(eOn,t,0.1);humE.frequency.setTargetAtTime(180+D.v*6,t,0.1);
  humBG.gain.setTargetAtTime(bOn,t,0.1);humB.frequency.setTargetAtTime(48+D.v*0.9,t,0.1);
 }
@@ -188,21 +188,15 @@ function startDrive(){
  D={t:0,dist:0,v:0,slider:0,mode:'e',batt:100,fuel:0,km:0,sat:100,satMax:100,
   hz:[],anoppiIn:false,legLen,stopDists:[legLen,legLen*2,legLen*3],stopNames:order,stopIdx:0,
   endDist:legLen*4,objs:[],cars:[],queue:[],bubble:null,cd:{},shake:0,curveNow:false,roundF,
-  offersDone:0,offerSkips:0,hirviCrash:0,sliderPid:null,heikkiN:0,loadF:1,carX:0.5,lane:0.5,boostT:0,
-  spawnT:2,slowT:6,noteT:0,skipped:[]};
- const nHir=Math.min(3,1+Math.floor(G.round/2));
- shuffle([0,1,2,3]).slice(0,nHir).forEach(l=>{D.objs.push({t:'hirvi',dist:l*legLen+rnd(1100,2800),lat:Math.random()<0.8?0.5:-0.5,warned:false,gone:false,leave:0,said:false});});
- const avoid=[...D.stopDists,...D.objs.map(o=>o.dist)];
- const near=d=>avoid.some(a=>Math.abs(a-d)<350);
- for(let d=ri(350,600);d<D.endDist;d+=ri(Math.max(250,420-G.round*15),Math.max(420,700-G.round*20))){if(!near(d))D.objs.push({t:'bump',dist:d,done:false});}
- D.objs.sort((a,b)=>a.dist-b.dist);
+  offersDone:0,offerSkips:0,gasId:null,brakeId:null,keyGas:false,keyBrake:false,gasP:0,brakeP:0,rough:0,clock:0,par:Math.max(150,200-4*(G.round-1)),heikkiN:0,loadF:1,carX:0.5,lane:0.5,boostT:0,
+  spawnT:2,slowT:5,cutT:14,noteT:0,skipped:[]};
  G.state='drive';
  speak('Klapit kyydissä. Jouni odottaa Nikkilässä.',3.4,1,'o');
 }
 
 // ====== puheenvuorot ======
 const L_BRAKE=['Vähän painaa nuo klapit...','Heikin Teslassa voin istua pitemmälle.','Tämä jarrutus ei tuntunut hyvältä.'];
-const L_BUMP=['Tämä ei ollut ennen näin kuoppainen.','Onkohan tämä nyt oikein?'];
+const L_ROUGH=['Voisiko ajaa vähän tasaisemmin?','Kaikki kolisee tuolla takana.','Tämä on kuin ajaisi traktorilla.','Onkohan tämä nyt oikein?'];
 const L_KIUAS=['Melko kova tuo kiuas.','Tuo kiuas ei ole vielä täysin kylmä.','Onko tämä nyt varmasti kytketty irti?','Kyllä tästä löylyt lähtee, jos vähän kolautetaan.'];
 const L_TRUNK=['Klapi pistää selkään.','Onko tässä nyt varmasti turvallista?','Tämä ei ollut ennen näin ahdasta.'];
 const L_SEAT=['Mukavaa, kun saa istua edessä.','Täällä on kyllä tilaa. Koko penkki minulle.'];
@@ -234,7 +228,7 @@ function setMode(m){
  if(m==='e'&&D.batt<=0){speak('Akku on tyhjä.',2,1,'o');return;}
  if(m===D.mode)return;
  D.mode=m;
- if(m==='b'){sfx('engine');speak('Heikin Teslalla pääsee pitemmälle.',3.6,3,'a');}
+ if(m==='h'){sfx('engine');speak('Heikin Teslalla pääsee pitemmälle.',3.6,3,'a');}
 }
 
 // ====== liikenne ======
@@ -243,21 +237,28 @@ const CARTYPES=[
  {n:'Polestar 2',col:'#ececf0',white:1,w:1},{n:'VW ID.3',col:'#f2f2f4',white:1,w:1},{n:'Toyota Corolla',col:'#f0f0f0',white:1,w:2},
  {n:'Opel',col:'#b8202a',w:2},{n:'Audi',col:'#1b1b1f',w:2},{n:'Skoda',col:'#8d9aa6',w:2},{n:'Taksi',col:'#d9c58a',w:1},{n:'Volvo',col:'#2d4a3a',w:2},{n:'Rekka',col:'#2a62a8',big:1,w:1}
 ];
-const SLOWTYPES=[{e:'🚜',n:'Traktori',kmh:30,col:'#3f8a3f'},{e:'🏕️',n:'Asuntovaunu',kmh:55,col:'#e8e8e8'},{e:'🛵',n:'Mopoauto',kmh:40,col:'#c9a227'}];
+const SLOWTYPES=[{e:'🚜',n:'Traktori',kmh:30,col:'#3f8a3f'},{e:'🏕️',n:'Asuntovaunu',kmh:55,col:'#e8e8e8'},{e:'🛵',n:'Mopoauto',kmh:40,col:'#c9a227'},{e:'🚌',n:'Linja-auto',kmh:50,col:'#2d7fb8'},{e:'🚚',n:'Rekka',kmh:60,col:'#b0462f'}];
 function pickCar(){const tot=CARTYPES.reduce((s,c)=>s+c.w,0);let r=Math.random()*tot;for(const c of CARTYPES){r-=c.w;if(r<=0)return c;}return CARTYPES[0];}
 const VS=6/3.6; // km/h -> virtuaalimetriä/s
 
 // ====== ajopäivitys ======
 function updateDrive(dt){
- const d=D;d.t+=dt;
+ const d=D;d.t+=dt;d.clock+=dt;
  for(let i=d.queue.length-1;i>=0;i--){const q=d.queue[i];if(d.t>=q.at){d.queue.splice(i,1);speak(q.text,q.dur,q.prio,q.who);}}
  if(d.bubble){d.bubble.t-=dt;if(d.bubble.t<=0)d.bubble=null;}
+ // polkimet: pitkä painallus nostaa tehoa vähitellen
+ const gasOn=d.gasId!==null||d.keyGas,brOn=d.brakeId!==null||d.keyBrake;
+ d.gasP=gasOn?Math.min(1,d.gasP+0.9*dt):Math.max(0,d.gasP-3*dt);
+ d.brakeP=brOn?Math.min(1,d.brakeP+1.6*dt):Math.max(0,d.brakeP-4*dt);
+ d.slider=d.brakeP>0.03?-d.brakeP:d.gasP;
+ const E=d.mode==='e';
  // kaista
  const px=d.carX;d.carX+=clamp(d.lane-d.carX,-1.8*dt,1.8*dt);
  const vxl=dt>0?(d.carX-px)/dt:0;
  const s=d.slider,slope=slopeAt(d.dist);
+ const vmax=E?110:130,amax=E?9:14;
  const coast=1.2+d.v*0.01;let a;
- if(s<0)a=s*55-coast;else{const vt=s*130;a=vt>d.v?Math.min(14,(vt-d.v)*0.5+1):-coast;}
+ if(s<0)a=s*55-coast;else{const vt=s*vmax;a=vt>d.v?Math.min(amax,(vt-d.v)*0.5+1):-coast;}
  a-=slope*3;
  if(d.v<=0&&a<0)a=0;
  const pv=d.v;d.v=clamp(d.v+a*dt,0,140);
@@ -265,8 +266,13 @@ function updateDrive(dt){
  d.cars.forEach(c=>{if(c.t==='slow'){const rel=c.dist-d.dist;if(rel>0&&rel<45&&d.carX>0.05)d.v=Math.min(d.v,c.kmh+2);}});
  const ae=dt>0?(d.v-pv)/dt:0,ja=Math.abs(ae);
  const dm=d.v*VS*dt;d.dist+=dm;d.km=d.dist/1000;
- hurt('jerk',(Math.max(0,ja-10)*0.2+Math.abs(vxl)*(d.v/100)*2)*dt);
- if(ae<-30)sayCd('brake',5,pick(L_BRAKE),2,3.2,'a');
+ // epätasaisuus: kova kaasu/jarru, kaistanvaihdot, kaarteet
+ const unev=Math.max(0,ja-10)*0.2+Math.abs(vxl)*(d.v/100)*2;
+ hurt('jerk',unev*dt);
+ d.sat-=Math.abs(vxl)*(d.v/100)*1.5*dt;
+ d.rough=Math.max(0,d.rough-0.8*dt)+unev*dt;
+ if(d.rough>2.5&&d.anoppiIn)sayCd('rough',9,pick(L_ROUGH),1,3.2,'a');
+ if(ae<-30){if(hasItem('kiuas')&&Math.random()<0.6)sayCd('brake',5,pick(L_KIUAS),2,3.2,'a');else sayCd('brake',5,pick(L_BRAKE),2,3.2,'a');}
  if(d.v>95)hurt('speed',(d.v-95)*0.25*dt);
  meltTime(dt,1);
  // kaarre
@@ -276,56 +282,45 @@ function updateDrive(dt){
  if(lat>1.7){if(hasItem('akvaario'))sayCd('curve',7,'Tuo mureena katsoo minua.',2,3,'a');else sayCd('curve',7,'Hiljempaa kaarteessa, kiitos.',1,3,'a');}
  d.sat-=Math.max(0,ja-14)*0.15*dt;
  if(ja<6)d.sat=Math.min(d.satMax,d.sat+0.3*dt);
- // eco-neula: liian kova kaasu käynnistää bensamoottorin
- if(d.mode==='e'&&s>0.8)d.boostT+=dt;else d.boostT=Math.max(0,d.boostT-dt*2);
- const boosting=d.mode==='e'&&d.boostT>0.5;
- if(boosting&&!d.boostSaid){d.boostSaid=true;sayCd('boost',12,'Heikin Teslalla pääsee pitemmälle.',3,3.4,'a');sfx('engine');}
- if(!boosting)d.boostSaid=false;
  // energia
  d.loadF=1+carriedWt()/40;const vr=d.v/80;
- if(d.mode==='e'){
-  if(d.batt<=0){setMode('b');}
-  else{
-   let dr=(0.12+0.5*vr*vr)*d.loadF*d.roundF+Math.max(0,ae)*0.04+Math.max(0,slope)*0.5*vr;
-   let rg=0;if(ae<0)rg+=Math.min(1.5,-ae*0.02);if(slope<0)rg+=-slope*0.4*vr;
-   if(d.v<0.5)dr=0;
-   d.batt=clamp(d.batt-(dr-rg)*dt,0,100);
-   if(boosting)d.fuel+=(dm/1000)*0.065*d.loadF*0.6;
-   if(d.batt<=0)setMode('b');
-  }
+ if(E){
+  let dr=(0.12+0.5*vr*vr)*d.loadF*d.roundF+Math.max(0,ae)*0.04+Math.max(0,slope)*0.5*vr;
+  let rg=0;if(ae<0)rg+=Math.min(1.5,-ae*0.02);if(slope<0)rg+=-slope*0.4*vr;
+  if(d.v<0.5)dr=0;
+  d.batt=clamp(d.batt-(dr-rg)*dt,0,100);
+  if(d.batt<=0){setMode('h');speak('Akku loppui. Hybridi hoitaa.',2.6,2,'o');}
  }else{
-  d.fuel+=(dm/1000)*0.065*d.loadF;
-  d.batt=clamp(d.batt+Math.min(0.8,Math.max(0,-ae)*0.012)*dt,0,100);
+  d.fuel+=(dm/1000)*0.065*d.loadF*(d.batt>5&&s>0.3?0.8:1);
+  d.batt=clamp(d.batt+Math.min(0.8,Math.max(0,-ae)*0.012)*dt-(d.batt>0&&s>0.4?0.25*s*dt:0),0,100);
  }
  // anopin satunnaiset kommentit
  if(d.anoppiIn&&d.t>d.noteT){d.noteT=d.t+rnd(18,30);const an=G.pieces.find(p=>p.anoppi);sayCd('idle',10,an&&an.loc==='seat'?pick(L_SEAT):pick(L_TRUNK),0,3,'a');}
- // esteet
- d.objs.forEach(o=>{
-  const rel=o.dist-d.dist;
-  if(o.t==='bump'&&!o.done&&rel<=0){
-   o.done=true;const hit=Math.pow(d.v/60,1.6);
-   if(d.v>8){hurt('jerk',hit*5);d.sat-=hit*3;sfx('bump');d.shake=Math.min(1,hit*0.6);
-    if(hasItem('kiuas')&&Math.random()<0.6)sayCd('bump',4,pick(L_KIUAS),1,3.2,'a');else sayCd('bump',4,pick(L_BUMP),1,3.2,'a');}
-  }
-  else if(o.t==='hirvi'&&!o.gone){
-   if(rel<1100&&rel>0&&!o.warned){o.warned=true;sfx('warn');speak('Hirvi tiellä!',2.5,5,'o');}
-   if(rel<200&&rel>0&&d.v<8){o.leave+=dt;if(o.leave>1.2){o.gone=true;speak('Voi ei, onko hirvi kunnossa?',3.2,3,'a');}}
-   if(rel<=0){
-    o.gone=true;
-    if(Math.abs(d.carX-o.lat)<0.45){
-     if(d.v>=25){d.hirviCrash++;hurt('jerk',45);d.sat-=25;d.v=0;d.shake=1;sfx('crash');speak('Voi ei, onko hirvi kunnossa?',3.6,5,'a');}
-     else{hurt('jerk',8);d.sat-=6;d.v=Math.min(d.v,5);sfx('bump');speak('Voi ei, onko hirvi kunnossa?',3.2,3,'a');}
-    }else{speak('Voi ei, onko hirvi kunnossa?',3.2,3,'a');}
-   }
-  }
- });
  // muut autot
  d.spawnT-=dt;
  if(d.spawnT<=0){d.spawnT=rnd(1.0,3.2)*Math.max(0.55,1-G.round*0.05);d.cars.push({t:'onc',lat:-0.5,dist:d.dist+rnd(1100,1250),v:rnd(100,140),spec:pickCar(),asked:false,hit:false});}
+ const nx=d.stopIdx<3?d.stopDists[d.stopIdx]:d.endDist;
  d.slowT-=dt;
- if(d.slowT<=0){d.slowT=rnd(18,34);const nx=d.stopIdx<3?d.stopDists[d.stopIdx]:d.endDist;const sp=pick(SLOWTYPES);const dd=d.dist+1200;if(nx-dd>500||nx<d.dist)d.cars.push({t:'slow',lat:0.5,dist:dd,v:sp.kmh*VS,kmh:sp.kmh,spec:sp,said:false});}
+ if(d.slowT<=0){
+  d.slowT=rnd(7,13)*Math.max(0.6,1-G.round*0.04);
+  const sp=pick(SLOWTYPES);const dd=d.dist+rnd(1000,1200);
+  if(nx-dd>500||nx<d.dist){
+   d.cars.push({t:'slow',lat:0.5,dist:dd,v:sp.kmh*VS,kmh:sp.kmh,spec:sp,said:false});
+   if(Math.random()<0.35){const sp2=pick(SLOWTYPES);d.cars.push({t:'slow',lat:0.5,dist:dd+rnd(70,130),v:sp2.kmh*VS,kmh:sp2.kmh,spec:sp2,said:true});}
+  }
+ }
+ // pujottelija: leikkaa eteen omalle kaistalle
+ d.cutT-=dt;
+ if(d.cutT<=0){
+  d.cutT=rnd(16,28);
+  if(d.v>45&&d.carX>0.05){
+   const dd=d.dist+rnd(180,260);
+   if(nx-dd>400||nx<d.dist){const kmh=Math.max(25,d.v-rnd(30,45));d.cars.push({t:'slow',cut:1,age:0,lat:0.5,dist:dd,v:kmh*VS,kmh,spec:{e:'🚙',n:'Pujottelija',col:'#c0392b'},said:true});speak('Pujottelija! Jarruta!',2.4,5,'o');sfx('warn');}
+  }
+ }
  for(let i=d.cars.length-1;i>=0;i--){
   const c=d.cars[i];
+  if(c.cut){c.age+=dt;if(c.age>5){c.kmh+=25*dt;c.v=c.kmh*VS;}}
   if(c.t==='onc')c.dist-=c.v*dt;else c.dist+=c.v*dt;
   const rel=c.dist-d.dist;
   if(c.t==='onc'){
@@ -340,7 +335,7 @@ function updateDrive(dt){
   }
  }
  // pysäkki / maali
- const target=d.stopIdx<3?d.stopDists[d.stopIdx]:d.endDist;
+ const target=nx;
  if(d.dist>=target){
   if(d.stopIdx<3)arriveStop();else{finishWin();return;}
  }
@@ -356,7 +351,7 @@ function arriveStop(){
  if(d.v>12){bad=true;}
  if(d.carX<0.1){bad=true;}
  if(bad){d.sat-=15;hurt('jerk',20);D.hz.forEach(h=>{if(h.p.haz.t==='time')h.val-=8;});sfx('crash');}
- d.v=0;d.slider=0;d.sliderPid=null;d.carX=0.5;d.lane=0.5;d.cars=[];
+ d.v=0;d.slider=0;d.gasId=null;d.brakeId=null;d.gasP=0;d.brakeP=0;d.carX=0.5;d.lane=0.5;d.cars=[];
  // tarjoukset
  G.pieces=G.pieces.filter(p=>!p.offer);
  const nOff=1+(G.round>=3?1:0);
@@ -415,12 +410,13 @@ function leaveStop(skip){
  else speak('Hyvä. Nyt eteenpäin!',2.4,2,'o');
 }
 function updateStop(dt){
- G.stopT+=dt;
+ G.stopT+=dt;D.clock+=dt;
  meltTime(dt,1.6);
  for(const h of D.hz){if(h.val<=0){finishFail(h.p.haz.fail);return;}}
 }
 
 // ====== lopetus ======
+function mmss(t){t=Math.max(0,Math.round(t));return Math.floor(t/60)+':'+String(t%60).padStart(2,'0');}
 function finishFail(reason){G.state='result';sfx('fail');G.result={win:false,reason};if(D)D.v=0;}
 function finishWin(){
  const d=D;
@@ -434,20 +430,21 @@ function finishWin(){
  const shop=d.offersDone*60-d.offerSkips*40;
  const bonus=master0?100:0;
  const klapit=car.some(p=>p.must)?150:0;
- const total=load+pack+fuelB+bonus+intact+anop+shop+klapit;
- const stars=total>=1000?3:total>=750?2:1;
+ const timeB=Math.round(clamp(250-(d.clock-(d.par-40))*4,-120,250));
+ const total=load+pack+fuelB+bonus+intact+anop+shop+klapit+timeB;
+ const stars=total>=1100?3:total>=850?2:1;
  let newBest=false;
  if(total>G.best){G.best=total;newBest=true;lsSet(BEST_KEY,String(total));}
  const avg=d.km>0?d.fuel/d.km*100:0;
  const jouni=stars===3?'Jouni: "Klapit tuli. Ja kaikki muukin. Kiitos!"':stars===2?'Jouni: "Klapit tuli. Mitä ihmettä nuo muut on?"':'Jouni: "Noh, klapit ainakin tuli."';
- G.result={win:true,total,stars,newBest,avg,master0,jouni,lines:[['Kuorma',load],['Pakkaus',pack],['Bensa',fuelB+bonus],['Ehjät tavarat',intact],['Anopin tyytyväisyys',anop],['Kaupat',shop],['Klapit Jounille',klapit]]};
+ G.result={win:true,total,stars,newBest,avg,master0,jouni,lines:[['Kuorma',load],['Pakkaus',pack],['Bensa',fuelB+bonus],['Ehjät tavarat',intact],['Anopin tyytyväisyys',anop],['Kaupat',shop],['Klapit Jounille',klapit],['Aika '+mmss(d.clock),timeB]]};
  G.state='result';sfx('win');d.v=0;
 }
 
 // ====== syöte ======
 let drag=null,trayPos=new Map();
-const SLY0=505,SLY1=695,SLC=600;
-function setSlider(y){if(D)D.slider=clamp((SLC-y)/95,-1,1);}
+const PED={brake:{x:14,y:562,w:116,h:150},gas:{x:230,y:562,w:116,h:150}};
+const inR=(p,r)=>p.x>=r.x&&p.x<=r.x+r.w&&p.y>=r.y&&p.y<=r.y+r.h;
 function pt(e){const r=cv.getBoundingClientRect();return{x:(e.clientX-r.left)/sc,y:(e.clientY-r.top)/sc};}
 function pieceRect(p){if(p.loc==='grid')return{x:GX+p.x*CS,y:GY+p.y*CS};if(p.loc==='seat')return{x:SX+p.x*CS,y:SY+p.y*CS};return trayPos.get(p)||null;}
 function pickPiece(pos){
@@ -461,15 +458,16 @@ function onDown(pos,id){
   const p=pickPiece(pos);
   if(p){const r=pieceRect(p);drag={p,id,ox:pos.x-r.x,oy:pos.y-r.y,x:pos.x,y:pos.y,sx:pos.x,sy:pos.y,t0:performance.now(),moved:false,prev:{loc:p.loc,x:p.x,y:p.y,w:p.w,h:p.h}};p.loc='drag';}
  }else if(G.state==='drive'){
-  if(pos.x>=276&&pos.y>=480){D.sliderPid=id;setSlider(pos.y);}
+  if(inR(pos,PED.brake))D.brakeId=id;
+  else if(inR(pos,PED.gas))D.gasId=id;
+  else if(pos.y>=130&&pos.y<478)D.lane=pos.x<180?-0.5:0.5;
  }
 }
 function onMove(pos,id){
  if(drag&&drag.id===id){drag.x=pos.x;drag.y=pos.y;if(Math.hypot(pos.x-drag.sx,pos.y-drag.sy)>8)drag.moved=true;}
- if(G.state==='drive'&&D&&D.sliderPid===id)setSlider(pos.y);
 }
 function onUp(id){
- if(G.state==='drive'&&D&&D.sliderPid===id){D.sliderPid=null;}
+ if(D){if(D.gasId===id)D.gasId=null;if(D.brakeId===id)D.brakeId=null;}
  if(drag&&drag.id===id){
   const p=drag.p,prev=drag.prev;const d=drag;drag=null;
   if(!d.moved&&performance.now()-d.t0<450){
@@ -486,7 +484,7 @@ function onUp(id){
   if(fitsGrid(p,gx,gy)){p.loc='grid';p.x=gx;p.y=gy;sfx('pop');}
   else if(G.state==='stop'&&seatOk(p,sx,sy,tlx,tly)){p.loc='seat';p.x=p.anoppi?0:sx;p.y=p.anoppi?0:sy;sfx('pop');}
   else if(prev.loc==='tray'){p.loc='tray';}
-  else if(!p.must&&!p.anoppi&&d.y>GY+GR*CS+8&&d.x>=(G.state==='stop'?165:0)){p.loc='tray';}
+  else if((!p.must||G.state==='pack')&&!p.anoppi&&d.y>470){p.loc='tray';}
   else{p.loc=prev.loc;p.x=prev.x;p.y=prev.y;p.w=prev.w;p.h=prev.h;}
  }
 }
@@ -496,12 +494,16 @@ cv.addEventListener('pointerup',e=>{onUp(e.pointerId);e.preventDefault();});
 cv.addEventListener('pointercancel',e=>{onUp(e.pointerId);});
 addEventListener('keydown',e=>{
  if(G.state!=='drive'||!D)return;
- if(e.key==='ArrowUp'||e.key==='w')D.slider=clamp(D.slider+0.1,-1,1);
- else if(e.key==='ArrowDown'||e.key==='s')D.slider=clamp(D.slider-0.1,-1,1);
+ if(e.key==='ArrowUp'||e.key==='w')D.keyGas=true;
+ else if(e.key==='ArrowDown'||e.key==='s')D.keyBrake=true;
  else if(e.key==='ArrowLeft'||e.key==='a')D.lane=-0.5;
  else if(e.key==='ArrowRight'||e.key==='d')D.lane=0.5;
- else if(e.key==='0')D.slider=0;
- else if(e.key===' '){setMode(D.mode==='e'?'b':'e');e.preventDefault();}
+ else if(e.key===' '){setMode(D.mode==='e'?'h':'e');e.preventDefault();}
+});
+addEventListener('keyup',e=>{
+ if(!D)return;
+ if(e.key==='ArrowUp'||e.key==='w')D.keyGas=false;
+ else if(e.key==='ArrowDown'||e.key==='s')D.keyBrake=false;
 });
 
 // ====== piirto: yleiset ======
@@ -527,11 +529,37 @@ function drawGridArea(){
  G.junk.forEach(j=>{rr(GX+j.x*CS+2,GY+j.y*CS+2,CS-4,CS-4,10,j.c,'rgba(0,0,0,0.5)',2);tx('pyörä',GX+j.x*CS+CS/2,GY+j.y*CS+CS/2-5,9,'#9aa3b0','center');tx('kotelo',GX+j.x*CS+CS/2,GY+j.y*CS+CS/2+6,9,'#9aa3b0','center');});
  G.pieces.forEach(p=>{if(p.loc==='grid')drawPiece(p,GX+p.x*CS,GY+p.y*CS);});
 }
+function drawCarTop(){
+ const L=GX-24,T=84,Wd=GC*CS+48,B=SY+2*CS+34;
+ ctx.fillStyle='#0c0e12';
+ [[L-7,T+54],[L+Wd-5,T+54],[L-7,B-96],[L+Wd-5,B-96]].forEach(w=>rr(w[0],w[1],12,48,5,'#0c0e12'));
+ rr(L,T,Wd,B-T,30,'#2b4a7a','#1b3355',3);
+ rr(L+8,T+8,Wd-16,B-T-16,22,'#1c2029');
+ rr(L+12,T+3,28,9,4,'#c22');rr(L+Wd-40,T+3,28,9,4,'#c22');
+ rr(L-11,B-46,13,20,5,'#2b4a7a');rr(L+Wd-2,B-46,13,20,5,'#2b4a7a');
+ poly([[L+18,B-1],[L+Wd-18,B-1],[L+Wd-36,B+19],[L+36,B+19]],'rgba(159,198,221,0.55)');
+ // kaadetut takapenkit
+ const fy=GY+GR*CS+14;
+ rr(GX-8,fy,GC*CS+16,36,6,'#2a303c','#3a4150',1);
+ ctx.strokeStyle='rgba(255,255,255,0.07)';ctx.lineWidth=2;
+ for(let x=GX+6;x<GX+GC*CS;x+=18){ctx.beginPath();ctx.moveTo(x,fy+4);ctx.lineTo(x-6,fy+32);ctx.stroke();}
+ tx('kaadetut takapenkit',180,fy+18,10,'#8a93a3','center','bold');
+ // kojelauta
+ rr(L+14,B-20,Wd-28,13,6,'#12151b');
+}
 function drawSeat(){
- tx('Pelkääjän paikka',SX,SY-14,12,'#c9d1dc','left','bold');
- rr(SX-6,SY-6,2*CS+12,2*CS+12,10,'#27406b','#3d5f99',2);
+ // kuljettajan paikka
+ rr(GX-6,SY-6,2*CS+12,2*CS+12,14,'#343a47','#4a5262',2);rr(GX+20,SY-11,48,8,4,'#4a5262');
+ em('🧔',GX+CS,SY+CS-2,34);
+ ctx.strokeStyle='#aab3c0';ctx.lineWidth=4;ctx.beginPath();ctx.arc(GX+CS,SY+2*CS+12,11,0,7);ctx.stroke();
+ tx('Oskari',GX+CS,SY+2*CS-8,9,'#c9d1dc','center','bold');
+ // konsoli
+ rr(SX-70,SY,60,2*CS,10,'#262a33');ctx.fillStyle='#4a5262';ctx.beginPath();ctx.arc(SX-40,SY+30,6,0,7);ctx.fill();
+ // pelkääjän paikka
+ rr(SX-6,SY-6,2*CS+12,2*CS+12,14,'#27406b','#3d5f99',2);rr(SX+20,SY-11,48,8,4,'#3d5f99');
  for(let y=0;y<2;y++)for(let x=0;x<2;x++){ctx.fillStyle=(x+y)%2?'#31507f':'#3a5d92';ctx.fillRect(SX+x*CS,SY+y*CS,CS,CS);}
- G.pieces.forEach(p=>{if(p.loc==='seat'){if(p.anoppi){ctx.fillStyle='rgba(20,30,60,0.45)';ctx.fillRect(SX,SY,2*CS,2*CS);tx('koko penkki',SX+CS+22,SY+CS+30,10,'#cfd9ea','center','bold');drawPiece(p,SX,SY);}else drawPiece(p,SX+p.x*CS,SY+p.y*CS);}});
+ if(G.state==='stop')tx('Pelkääjän paikka',SX+CS,SY+2*CS+14,10,'#cfd9ea','center','bold');
+ G.pieces.forEach(p=>{if(p.loc==='seat'){if(p.anoppi){ctx.fillStyle='rgba(20,30,60,0.45)';ctx.fillRect(SX,SY,2*CS,2*CS);tx('koko penkki',SX+CS,SY+CS+30,10,'#cfd9ea','center','bold');drawPiece(p,SX,SY);}else drawPiece(p,SX+p.x*CS,SY+p.y*CS);}});
 }
 function drawDrag(){
  if(!drag)return;const p=drag.p;const tlx=drag.x-drag.ox,tly=drag.y-drag.oy;
@@ -588,18 +616,20 @@ function renderTitle(){
 // ====== piirto: pakkaus ======
 function renderPack(){
  ctx.fillStyle='#161b24';ctx.fillRect(0,0,W,H);
- tx('Pakkaa klapit – kierros '+G.round,W/2,24,18,'#fff','center','bold');
- tx('Muuta ei ole mukana. Raahaa klapit takakonttiin.',W/2,50,12,'#aab3c0','center');
- tx('Napautus kääntää. Raskas tavara alas, tilaa tulevalle.',W/2,70,12,'#aab3c0','center');
+ tx('Pakkaa klapit – kierros '+G.round,W/2,20,18,'#fff','center','bold');
+ tx('Muuta ei ole mukana. Raahaa klapit takakonttiin.',W/2,42,12,'#aab3c0','center');
+ tx('Napautus kääntää. Raskas tavara alas, tilaa tulevalle.',W/2,60,12,'#aab3c0','center');
+ drawCarTop();
  drawGridArea();
- layoutTray(12,320,336);
- tx('Tavarat',14,300,12,'#c9d1dc','left','bold');
+ drawSeat();
+ layoutTray(12,498,336);
+ tx('Tavarat',14,486,11,'#c9d1dc','left','bold');
  G.pieces.forEach(p=>{if(p.loc==='tray'){const r=trayPos.get(p);drawPiece(p,r.x,r.y);}});
  drawDrag();
  const ok=G.pieces.filter(p=>p.must).every(isPlaced);
- if(!ok){const a=0.6+0.4*Math.sin(performance.now()/200);ctx.globalAlpha=a;tx('🪵 Klapit pitää saada kyytiin!',W/2,625,14,'#ffb38a','center','bold');ctx.globalAlpha=1;}
- tx('Matkalla tulee lisää. Jätä tilaa.',W/2,642,12,'#aab3c0','center');
- button('LÄHDE AJAMAAN',80,655,200,52,'#2fa35f',()=>startDrive(),{size:19,disabled:!ok});
+ if(!ok){const a=0.6+0.4*Math.sin(performance.now()/200);ctx.globalAlpha=a;tx('🪵 Klapit pitää saada kyytiin!',W/2,620,14,'#ffb38a','center','bold');ctx.globalAlpha=1;}
+ tx('Matkalla tulee lisää. Jätä tilaa.',W/2,640,12,'#aab3c0','center');
+ button('LÄHDE AJAMAAN',80,654,200,52,'#2fa35f',()=>startDrive(),{size:19,disabled:!ok});
  drawMute();
 }
 
@@ -607,22 +637,23 @@ function renderPack(){
 function renderStop(){
  const st=G.store;
  ctx.fillStyle='#161b24';ctx.fillRect(0,0,W,H);
- rr(10,8,300,32,8,st.col);tx(st.n.toUpperCase(),160,24,20,st.dark?'#111':'#fff','center','bold');
- let ly=54;
- G.msg.forEach(m=>{wrap(m,336,12,'bold').forEach(l=>{if(ly<92){tx(l,W/2,ly,12,'#ffd166','center','bold');ly+=15;}});});
+ rr(10,6,250,28,8,st.col);tx(st.n.toUpperCase(),135,20,18,st.dark?'#111':'#fff','center','bold');
+ tx('⏱ '+mmss(D.clock),292,20,13,'#c9d1dc','center','bold');
+ let ly=46;
+ G.msg.forEach(m=>{wrap(m,336,12,'bold').forEach(l=>{if(ly<80){tx(l,W/2,ly,12,'#ffd166','center','bold');ly+=14;}});});
+ drawCarTop();
  drawGridArea();
  drawSeat();
- layoutTray(170,320,180);
- tx('Haettavat',172,306,12,'#c9d1dc','left','bold');
+ layoutTray(12,498,336);
+ tx('Haettavat (raahaa autoon)',14,486,11,'#c9d1dc','left','bold');
+ tx('pakasteet sulavat',346,486,10,'#8a93a3','right');
  G.pieces.forEach(p=>{if(p.loc==='tray'){const r=trayPos.get(p);drawPiece(p,r.x,r.y);}});
  drawDrag();
- drawHazBars(14,520,170,22);
- tx('Aikaa kuluu: '+fmt(G.stopT,0)+' s (pakasteet sulavat)',W/2,578,11,'#8a93a3','center');
- tx('Anoppi vie etupenkillä koko penkin.',W/2,594,11,'#8a93a3','center');
+ drawHazBars(14,586,170,18);
  const ok=reqOk();
- button('JATKA AJOA',60,608,240,50,'#2fa35f',()=>leaveStop(false),{disabled:!ok,size:19});
+ button('JATKA AJOA',60,640,240,38,'#2fa35f',()=>leaveStop(false),{disabled:!ok,size:18});
  const reqNoOffer=G.pieces.filter(p=>p.must||p.anoppi).every(isPlaced);
- button('Ohita tarjous ('+G.sender+' ei ilahdu)',60,666,240,40,'#8b3a3a',()=>leaveStop(true),{size:13,disabled:!reqNoOffer});
+ button('Ohita tarjous ('+G.sender+' ei ilahdu)',60,682,240,32,'#8b3a3a',()=>leaveStop(true),{size:12,disabled:!reqNoOffer});
  drawMute();
 }
 
@@ -672,29 +703,66 @@ function drawStoreSprite(x,y,w,st){
 }
 function drawPassatRear(cx,by,lean,brake){
  ctx.save();ctx.translate(cx,by);ctx.rotate(lean);
- ctx.fillStyle='rgba(0,0,0,0.35)';ctx.beginPath();ctx.ellipse(0,0,74,9,0,0,7);ctx.fill();
- ctx.fillStyle='#111';ctx.fillRect(-62,-24,22,24);ctx.fillRect(40,-24,22,24);
- rr(-68,-54,136,36,8,'#2b4a7a');
- ctx.fillStyle='#2b4a7a';ctx.beginPath();ctx.moveTo(-56,-54);ctx.lineTo(-46,-84);ctx.lineTo(46,-84);ctx.lineTo(56,-54);ctx.closePath();ctx.fill();
- ctx.fillStyle='#9fc6dd';ctx.beginPath();ctx.moveTo(-48,-56);ctx.lineTo(-40,-80);ctx.lineTo(40,-80);ctx.lineTo(48,-56);ctx.closePath();ctx.fill();
- // klapit näkyvät takaikkunassa
- for(let i=0;i<5;i++){ctx.fillStyle=i%2?'#a0693a':'#b9814a';ctx.beginPath();ctx.arc(-30+i*15,-62,7,0,7);ctx.fill();}
- if(D&&D.anoppiIn)em('👵',20,-68,18);
- rr(-66,-50,26,10,3,brake?'#ff4040':'#a01818');rr(40,-50,26,10,3,brake?'#ff4040':'#a01818');
- if(brake){ctx.fillStyle='rgba(255,60,60,0.25)';ctx.beginPath();ctx.arc(-53,-45,22,0,7);ctx.arc(53,-45,22,0,7);ctx.fill();}
- rr(-20,-38,40,14,2,'#f2f2f2');tx('OSKARI',0,-31,8,'#222','center','bold');
- rr(-66,-24,132,8,3,'#1e2a3d');
- ctx.fillStyle='#2fb5ff';ctx.fillRect(-60,-58,120,3);
+ ctx.fillStyle='rgba(0,0,0,0.38)';ctx.beginPath();ctx.ellipse(0,0,78,9,0,0,7);ctx.fill();
+ // renkaat
+ rr(-64,-22,22,22,4,'#0b0b0d');rr(42,-22,22,22,4,'#0b0b0d');
+ // alapuskuri
+ const gl=ctx.createLinearGradient(0,-36,0,-12);gl.addColorStop(0,'#2a4d80');gl.addColorStop(1,'#16263f');
+ rr(-70,-36,140,24,9,gl);
+ // pääkori
+ const gb=ctx.createLinearGradient(0,-70,0,-30);gb.addColorStop(0,'#41689f');gb.addColorStop(1,'#25446f');
+ rr(-70,-70,140,42,11,gb);
+ // katto ja takaikkuna
+ ctx.fillStyle='#2d507f';ctx.beginPath();ctx.moveTo(-58,-68);ctx.lineTo(-47,-96);ctx.lineTo(47,-96);ctx.lineTo(58,-68);ctx.closePath();ctx.fill();
+ const gg=ctx.createLinearGradient(0,-94,0,-68);gg.addColorStop(0,'#5d7f96');gg.addColorStop(1,'#a9cde0');
+ ctx.fillStyle=gg;ctx.beginPath();ctx.moveTo(-51,-70);ctx.lineTo(-42,-92);ctx.lineTo(42,-92);ctx.lineTo(51,-70);ctx.closePath();ctx.fill();
+ // klapit takaikkunassa
+ for(let i=0;i<6;i++){ctx.fillStyle=i%2?'#a0693a':'#b9814a';ctx.beginPath();ctx.arc(-35+i*14,-75,6.5,0,7);ctx.fill();}
+ if(D&&D.anoppiIn)em('👵',22,-80,17);
+ // takalasinpyyhin, kattokiskot, spoileri
+ ctx.strokeStyle='#111';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(0,-72);ctx.lineTo(24,-86);ctx.stroke();
+ rr(-52,-100,104,3,1.5,'#b8bcc4');rr(-46,-97,92,4,2,'#1b3355');
+ // peilit
+ rr(-79,-74,10,7,3,'#2d507f');rr(69,-74,10,7,3,'#2d507f');
+ // LED-takavalot + palkki
+ const rc=brake?'#ff3838':'#b01c1c';
+ ctx.fillStyle=rc;ctx.beginPath();ctx.moveTo(-70,-66);ctx.lineTo(-32,-66);ctx.lineTo(-32,-56);ctx.lineTo(-66,-50);ctx.quadraticCurveTo(-70,-52,-70,-60);ctx.closePath();ctx.fill();
+ ctx.beginPath();ctx.moveTo(70,-66);ctx.lineTo(32,-66);ctx.lineTo(32,-56);ctx.lineTo(66,-50);ctx.quadraticCurveTo(70,-52,70,-60);ctx.closePath();ctx.fill();
+ ctx.fillStyle=brake?'#ffd0d0':'#e8a0a0';
+ for(let i=0;i<4;i++){rr(-64+i*8,-63,5,3,1,ctx.fillStyle);rr(34+i*8,-63,5,3,1,ctx.fillStyle);}
+ rr(-31,-62,62,3,1.5,brake?'#ff5050':'#c42828');
+ if(brake){ctx.fillStyle='rgba(255,60,60,0.22)';ctx.beginPath();ctx.arc(-52,-58,24,0,7);ctx.arc(52,-58,24,0,7);ctx.fill();}
+ // VW-logo
+ ctx.fillStyle='#0b2a5a';ctx.beginPath();ctx.arc(0,-48,8,0,7);ctx.fill();ctx.strokeStyle='#e8eef7';ctx.lineWidth=1.5;ctx.stroke();
+ tx('VW',0,-48,7,'#fff','center','bold');
+ tx('PASSAT',-40,-44,6,'#d7dce4','center','bold');
+ rr(26,-50,22,9,2,'#17283f');tx('GTE',37,-45.5,6.5,'#7fd0ff','center','bold');
+ // rekisterikilpi
+ rr(-23,-37,46,13,2,'#f6f6f6','#222',1);rr(-23,-37,6,13,2,'#1d4fa3');
+ tx('OSK-123',3,-30.5,8,'#111','center','bold');
+ // puskurin alaosa, heijastimet, diffuuseri
+ rr(-66,-20,132,7,3,'#0f1824');
+ rr(-62,-21,10,4,1,'#c22');rr(52,-21,10,4,1,'#c22');
+ rr(-18,-14,36,4,1,'#05080d');
  ctx.restore();
+}
+function drawPedal(r,label,frac,col,sub){
+ rr(r.x,r.y,r.w,r.h,16,'#1f242d','#323947',2);
+ const off=frac*12;
+ rr(r.x+10,r.y+10+off,r.w-20,r.h-34-off*0.5,12,frac>0.02?col:'#3a4150');
+ ctx.strokeStyle='rgba(0,0,0,0.35)';ctx.lineWidth=3;
+ for(let i=0;i<5;i++){const yy=r.y+30+off+i*20;ctx.beginPath();ctx.moveTo(r.x+20,yy);ctx.lineTo(r.x+r.w-20,yy);ctx.stroke();}
+ tx(label,r.x+r.w/2,r.y+r.h-14,15,'#fff','center','bold');
+ bar(r.x+14,r.y+r.h-33,r.w-28,5,frac,'#fff');
 }
 function drawGauge(cx,cy,r){
  const ang=v=>Math.PI+(v+1)/2*Math.PI;
- const arc=(a0,a1,col)=>{ctx.beginPath();ctx.arc(cx,cy,r,a0,a1);ctx.lineWidth=12;ctx.strokeStyle=col;ctx.stroke();};
- arc(ang(-1),ang(0),'#3b82c4');arc(ang(0),ang(0.8),'#2fa35f');arc(ang(0.8),ang(1),'#d33');
+ const arc=(a0,a1,col)=>{ctx.beginPath();ctx.arc(cx,cy,r,a0,a1);ctx.lineWidth=11;ctx.strokeStyle=col;ctx.stroke();};
+ arc(ang(-1),ang(0),'#3b82c4');arc(ang(0),ang(1),D.mode==='e'?'#2fa35f':'#d0821c');
  const a=ang(clamp(D.slider,-1,1));
  ctx.strokeStyle='#fff';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+Math.cos(a)*(r-4),cy+Math.sin(a)*(r-4));ctx.stroke();
  ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(cx,cy,5,0,7);ctx.fill();
- tx('LATAUS',cx-r+6,cy+12,9,'#7fb2e5','center','bold');tx('ECO',cx,cy-r-14,10,'#3ddc84','center','bold');tx('BENSA',cx+r-6,cy+12,9,'#ff7a7a','center','bold');
+ tx('JARRU',cx-r+8,cy+13,8,'#7fb2e5','center','bold');tx('TEHO',cx,cy-r-12,9,'#c9d1dc','center','bold');tx('KAASU',cx+r-8,cy+13,8,D.mode==='e'?'#3ddc84':'#ffb060','center','bold');
 }
 function renderDrive(){
  const d=D;
@@ -705,8 +773,8 @@ function renderDrive(){
  tx(Math.round(d.batt)+' %',105,22,11,'#fff','center','bold');
  tx(Math.round(d.v)+' km/h',250,22,20,'#fff','center','bold');
  em('⛽',14,50,15);tx(fmt(d.fuel,2)+' l',30,50,13,d.fuel>0.001?'#ff8a8a':'#3ddc84','left','bold');
- rr(100,40,86,20,10,d.mode==='e'?'#1f7a4a':'#8a5a16');tx(d.mode==='e'?'SÄHKÖ':'BENSA',143,50,11,'#fff','center','bold');
- tx('Kierros '+G.round,260,50,11,'#8a93a3','center');
+ rr(100,40,86,20,10,d.mode==='e'?'#1f7a4a':'#8a5a16');tx(d.mode==='e'?'SÄHKÖ':'HYBRID',143,50,11,'#fff','center','bold');
+ tx('⏱ '+mmss(d.clock)+' / '+mmss(d.par),262,50,12,d.clock>d.par?'#ff8a8a':'#c9d1dc','center','bold');
  drawHazBars(12,68,172,22);
  const px0=16,px1=344,py=118,frac=clamp(d.dist/d.endDist,0,1);
  ctx.strokeStyle='#3a4150';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(px0,py);ctx.lineTo(px1,py);ctx.stroke();
@@ -733,7 +801,6 @@ function renderDrive(){
  // spritet segmentteihin
  const bucket=[];for(let j=0;j<NSEG;j++)bucket.push([]);
  const addS=(wd,lat,o)=>{const f=wd/SEGL-k0;const j=Math.floor(f);if(j>=0&&j<NSEG)bucket[j].push({wd,lat,o});};
- d.objs.forEach(o=>{if(o.t==='hirvi'&&o.gone)return;addS(o.dist,o.t==='hirvi'?o.lat:0,o);});
  d.cars.forEach(c=>addS(c.dist,c.lat,c));
  const nextTarget=d.stopIdx<3?d.stopDists[d.stopIdx]:d.endDist;
  addS(nextTarget,1.9,{t:d.stopIdx<3?'store':'finish'});
@@ -752,9 +819,7 @@ function renderDrive(){
   bucket[j].forEach(sp=>{
    const p=proj(R,sp.wd,sp.lat);if(!p)return;
    const o=sp.o,w=Math.min(300,120*p.s);
-   if(o.t==='bump'){ctx.fillStyle='#8c8f98';ctx.beginPath();ctx.ellipse(p.x,p.sy,p.w*0.95,Math.max(1,p.w*0.07),0,0,7);ctx.fill();ctx.fillStyle='#f5c400';ctx.beginPath();ctx.ellipse(p.x,p.sy-1,p.w*0.5,Math.max(0.5,p.w*0.03),0,0,7);ctx.fill();}
-   else if(o.t==='hirvi'){em('🦌',p.x,p.sy-w*0.35,w*0.9);}
-   else if(o.t==='onc'){drawCarFront(p.x,p.sy,w,o.spec);}
+   if(o.t==='onc'){drawCarFront(p.x,p.sy,w,o.spec);}
    else if(o.t==='slow'){drawSlowRear(p.x,p.sy,w,o.spec);}
    else if(o.t==='store'){drawStoreSprite(p.x,p.sy,Math.min(300,170*p.s),STORES[d.stopNames[d.stopIdx]]);}
    else if(o.t==='finish'){const bw=170*p.s;rr(p.x-bw*0.5,p.sy-bw*0.7,bw,bw*0.3,4,'#fff','#222',1.5);tx('NIKKILÄ',p.x,p.sy-bw*0.55,Math.max(6,bw*0.16),'#222','center','bold');}
@@ -762,19 +827,18 @@ function renderDrive(){
  }
  // oma auto
  const brake=d.slider<-0.05;
+ if(d.t<12){ctx.globalAlpha=0.75;tx('Napauta tietä: vasen = ohitus, oikea = oikea kaista',180,330,11,'#fff','center','bold');ctx.globalAlpha=1;}
  const lean=-curveAt(d.dist)*0.012*(d.v/100)+(d.lane-d.carX)*0.04;
  drawPassatRear(180,YB-2,lean,brake);
 
  // varoitukset
- const hirvi=d.objs.find(o=>o.t==='hirvi'&&!o.gone&&o.dist-d.dist<1100&&o.dist-d.dist>0);
  const onc=d.cars.find(c=>c.t==='onc'&&c.dist-d.dist>0&&c.dist-d.dist<650);
  const nextStopRel=nextTarget-d.dist;
  let bn=null;
  if(d.carX<0&&onc){bn=['⚠️ VASTAANTULIJA! Takaisin oikealle','#d33'];}
- else if(hirvi){bn=['⚠️ HIRVI TIEDOSSÄ!','#d33'];}
  else if(d.stopIdx<3&&nextStopRel<800){bn=['PYSÄHDY OIKEALLA: '+STORES[d.stopNames[d.stopIdx]].n+' '+Math.round(nextStopRel)+' m','#1f5fa8'];}
  else if(d.curveNow&&d.v>70){bn=['↪ Kaarre – hiljempaa','#c77d00'];}
- if(bn&&(Math.floor(performance.now()/300)%2===0||!(hirvi||(d.carX<0&&onc)))){rr(40,138,280,24,8,bn[1]);tx(bn[0],180,150,12,'#fff','center','bold');}
+ if(bn&&(Math.floor(performance.now()/300)%2===0||!(d.carX<0&&onc))){rr(40,138,280,24,8,bn[1]);tx(bn[0],180,150,12,'#fff','center','bold');}
  // puhekupla
  if(d.bubble){
   const lines=wrap(d.bubble.text,236,14,'bold');const bw=Math.max(...lines.map(l=>ctx.measureText(l).width))+54,bh=lines.length*18+14;
@@ -787,21 +851,14 @@ function renderDrive(){
 
  // --- ohjaimet ---
  ctx.fillStyle='#161b24';ctx.fillRect(0,478,W,242);
- const L=d.lane<0;
- button('◀ OHITUS',14,490,86,64,L?'#c77d00':'#3a4150',()=>{d.lane=-0.5;},{size:14});
- button('OIKEALLE ▶',108,490,90,64,!L?'#1f7a4a':'#3a4150',()=>{d.lane=0.5;},{size:13});
- const eb=d.mode==='e';
- button(eb?'⚡ SÄHKÖ → bensaan':'⛽ BENSA → sähköön',14,562,184,44,eb?'#1f7a4a':'#8a5a16',()=>setMode(d.mode==='e'?'b':'e'),{size:13});
- drawGauge(106,696,52);
- // liukusäädin
- tx('KAASU',300,492,11,'#3ddc84','center','bold');tx('JARRU',300,708,11,'#ff6b6b','center','bold');
- rr(290,SLY0,20,SLY1-SLY0,10,'#2a303b');
- const ky=clamp(SLC-d.slider*95,SLY0+8,SLY1-8);
- if(d.slider>0)rr(290,ky,20,SLC-ky,6,'#2fa35f');else if(d.slider<0)rr(290,SLC,20,ky-SLC,6,'#c0392b');
- ctx.fillStyle='#fff';ctx.fillRect(284,SLC-1,32,2);
- ctx.fillStyle='#e9eef5';ctx.beginPath();ctx.arc(300,ky,18,0,7);ctx.fill();ctx.fillStyle='#8a93a3';ctx.fillRect(291,ky-1,18,2);
- button('0',240,586,36,28,'#3a4150',()=>{d.slider=0;},{size:14});
- tx('Kuorma: '+carriedWt(),220,640,11,'#8a93a3','center');
+ const E=d.mode==='e';
+ button('⚡ SÄHKÖ',14,486,166,48,E?'#1f7a4a':'#3a4150',()=>setMode('e'),{size:17});
+ button('⛽ HYBRID',186,486,160,48,!E?'#b36b12':'#3a4150',()=>setMode('h'),{size:17});
+ tx(E?'hiljainen · max 110 km/h · ei bensaa':'nopea · pääosin bensaa · akku auttaa',180,548,10,'#8a93a3','center');
+ drawPedal(PED.brake,'JARRU',d.brakeP,'#c0392b');
+ drawPedal(PED.gas,'KAASU',d.gasP,E?'#2fa35f':'#d0821c');
+ tx('Kuorma: '+carriedWt(),180,586,11,'#8a93a3','center');
+ drawGauge(180,692,40);
  drawMute();
 }
 
@@ -852,7 +909,7 @@ function frame(t){
  else if(G.state==='result')renderResult();
  requestAnimationFrame(frame);
 }
-if(window.__TEST)window.__TEST.api={G,getD:()=>D,startRound,startDrive,updateDrive,updateStop,leaveStop,frame,onDown,onUp,onMove,setMode,genRound,packQuality,fitsGrid,fitsSeat,reqOk,isPlaced};
+if(window.__TEST)window.__TEST.api={G,getD:()=>D,startRound,startDrive,updateDrive,updateStop,leaveStop,frame,onDown,onUp,onMove,setMode,PED,genRound,packQuality,fitsGrid,fitsSeat,reqOk,isPlaced};
 requestAnimationFrame(frame);
 })();
 </script>
